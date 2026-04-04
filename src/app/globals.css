@@ -1,0 +1,15 @@
+/**
+ * Project: OmniModel - StyleSheet
+ * Description: Base Tailwind configuration and application-wide style resets.
+ * Author: Mihiran Thilakarathna
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#04040a] text-slate-50 antialiased overflow-x-hidden;
+  }
+}

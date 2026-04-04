@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+tensorflow-cpu
+torch --index-url https://download.pytorch.org/whl/cpu
+onnx
+onnxscript
+tf2onnx
+tf_keras
