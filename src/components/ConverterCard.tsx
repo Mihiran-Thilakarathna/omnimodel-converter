@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useRef } from "react";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, FileRejection } from "react-dropzone";
 import { UploadCloud, CheckCircle2, ArrowRight, AlertTriangle, Info } from "lucide-react";
 
 type ProcessStage = "idle" | "options" | "converting" | "done" | "error";
@@ -10,9 +10,27 @@ type ProcessStage = "idle" | "options" | "converting" | "done" | "error";
 const SUPPORTED_CONVERSIONS: Record<string, string[]> = {
   ".keras": [".tflite", ".onnx"],
   ".h5": [".tflite", ".onnx", ".keras"],
-  ".pth": [".onnx", ".pt"],
-  ".pt": [".onnx", ".pth"],
+  ".pth": [".onnx", ".pt", ".safetensors", ".mlmodel"],
+  ".pt": [".onnx", ".pth", ".safetensors", ".mlmodel"],
   ".onnx": [".tflite", ".pb"],
+  ".safetensors": [".pt", ".pth"],
+  ".zip": [".onnx", ".tflite"],
+};
+
+// Friendly labels for targets whose extension alone would be unclear
+const FORMAT_LABELS: Record<string, string> = {
+  ".pb": "TensorFlow SavedModel (.zip)",
+  ".mlmodel": "CoreML (.mlmodel)",
+  ".safetensors": "Safetensors",
+  ".zip": "SavedModel Bundle (.zip)",
+};
+
+// Some targets are actually delivered as an archive rather than the raw
+// extension the user picked (e.g. a TensorFlow SavedModel bundle for ".pb").
+// The blob returned by fetch() carries no filename/headers of its own, so the
+// download attribute below must know the true extension to name the file correctly.
+const DOWNLOAD_EXTENSION_OVERRIDES: Record<string, string> = {
+  ".pb": ".zip",
 };
 
 export default function ConverterCard() {
@@ -28,14 +46,28 @@ export default function ConverterCard() {
   const [downloadUrl, setDownloadUrl] = useState<string>("");
   const [downloadSize, setDownloadSize] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const [uploadRejectionMessage, setUploadRejectionMessage] = useState<string>("");
 
   // Progress state variables
   const [progress, setProgress] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>("");
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleFileDrop = useCallback((incomingFiles: File[]) => {
+  const handleFileDrop = useCallback((incomingFiles: File[], rejectedFiles: FileRejection[]) => {
+    if (rejectedFiles.length > 0) {
+      const rejectionCode = rejectedFiles[0].errors[0]?.code;
+      if (rejectionCode === "file-too-large") {
+        setUploadRejectionMessage("That file is too large — the maximum upload size is 5GB.");
+      } else if (rejectionCode === "too-many-files") {
+        setUploadRejectionMessage("Please drop only one file at a time.");
+      } else {
+        setUploadRejectionMessage("That file couldn't be uploaded. Please try a different file.");
+      }
+      return;
+    }
+
     if (incomingFiles.length === 0) return;
+    setUploadRejectionMessage("");
 
     const incoming = incomingFiles[0];
     const matchExt = incoming.name.match(/\.[0-9a-z]+$/i);
@@ -65,9 +97,9 @@ export default function ConverterCard() {
   const executeConversion = async () => {
     if (!destinationFormat || !uploadedFileObj) return;
 
-    const isPyTorchToOnnx = (sourceExtension === ".pt" || sourceExtension === ".pth") && destinationFormat === ".onnx";
+    const needsInputShape = (sourceExtension === ".pt" || sourceExtension === ".pth") && (destinationFormat === ".onnx" || destinationFormat === ".mlmodel");
 
-    if (isPyTorchToOnnx && shapeMode === "custom") {
+    if (needsInputShape && shapeMode === "custom") {
       const shapeRegex = /^(\s*\d+\s*,)+\s*\d+\s*$/;
       if (!shapeRegex.test(inputShape)) {
         setShapeError("Invalid format! Please use comma-separated numbers only (e.g., 1, 3, 224, 224).");
@@ -81,54 +113,79 @@ export default function ConverterCard() {
     setProgress(0);
     setProgressMessage("Uploading securely to node...");
 
-    // Simulate progress bar updates
-    let currentP = 0;
-    intervalRef.current = setInterval(() => {
-      // Increment progress by a random amount between 2% and 8%
-      currentP += Math.random() * 6 + 2;
+    const formData = new FormData();
+    formData.append("file", uploadedFileObj);
+    formData.append("target_format", destinationFormat);
+    if (needsInputShape) {
+      formData.append("input_shape", inputShape);
+    }
 
-      // Pause at 95% until server response is received
-      if (currentP > 95) currentP = 95;
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/convert';
 
-      setProgress(Math.floor(currentP));
-
-      // Update user message based on conversion progress
-      if (currentP < 25) setProgressMessage("Uploading securely to node...");
-      else if (currentP < 50) setProgressMessage("Analyzing model architecture...");
-      else if (currentP < 75) setProgressMessage("Translating network layers...");
-      else if (currentP < 95) setProgressMessage("Optimizing engine operations...");
-      else setProgressMessage("Finalizing output (this can take a moment)...");
-    }, 1200);
+    // Once the upload itself finishes, the server is processing the model and
+    // gives no progress signal of its own — simulate a slow crawl toward 95%
+    // so the bar doesn't just freeze while a larger model converts.
+    const startProcessingSimulation = () => {
+      intervalRef.current = setInterval(() => {
+        setProgress((prev) => {
+          const next = Math.min(prev + Math.random() * 4 + 1, 95);
+          if (next < 70) setProgressMessage("Analyzing model architecture...");
+          else if (next < 90) setProgressMessage("Translating network layers...");
+          else setProgressMessage("Finalizing output (this can take longer for larger models)...");
+          return next;
+        });
+      }, 1200);
+    };
 
     try {
-      const formData = new FormData();
-      formData.append("file", uploadedFileObj);
-      formData.append("target_format", destinationFormat);
+      const blob: Blob = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", API_URL);
+        xhr.responseType = "blob";
 
-      if (isPyTorchToOnnx) {
-        formData.append("input_shape", inputShape);
-      }
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            // Real upload progress occupies the first half of the bar; the
+            // second half is the simulated server-side processing phase.
+            setProgress((event.loaded / event.total) * 50);
+          }
+        };
+        xhr.upload.onload = () => {
+          setProgress(50);
+          setProgressMessage("Analyzing model architecture...");
+          startProcessingSimulation();
+        };
 
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/convert';
+        xhr.onload = () => {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(xhr.response as Blob);
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => {
+            let errDetail = `Server raised error with status: ${xhr.status}`;
+            try {
+              const parsed = JSON.parse(reader.result as string);
+              errDetail = parsed.detail || errDetail;
+            } catch (_) { }
+            reject(new Error(errDetail));
+          };
+          reader.onerror = () => reject(new Error(`Server raised error with status: ${xhr.status}`));
+          reader.readAsText(xhr.response as Blob);
+        };
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        body: formData,
+        xhr.onerror = () => {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          reject(new Error("Could not reach the conversion server. Check your connection (or that the server is running) and try again."));
+        };
+
+        xhr.send(formData);
       });
 
-      if (!response.ok) {
-        let errDetail = `Server raised error with status: ${response.status}`;
-        try {
-          const errData = await response.json();
-          errDetail = errData.detail || errDetail;
-        } catch (_) { }
-        throw new Error(errDetail);
-      }
-
-      const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
 
-      // Complete progress and clear interval on success
+      // Complete progress on success
       if (intervalRef.current) clearInterval(intervalRef.current);
       setProgress(100);
       setProgressMessage("Conversion Complete!");
@@ -163,6 +220,7 @@ export default function ConverterCard() {
     setDownloadUrl("");
     setDownloadSize("");
     setErrorMessage("");
+    setUploadRejectionMessage("");
     setProgress(0);
     setProgressMessage("");
   };
@@ -177,34 +235,51 @@ export default function ConverterCard() {
   };
 
   const allowedFormats = SUPPORTED_CONVERSIONS[sourceExtension] || [];
-  const isPyTorchToOnnx = (sourceExtension === ".pt" || sourceExtension === ".pth") && destinationFormat === ".onnx";
+  const needsInputShape = (sourceExtension === ".pt" || sourceExtension === ".pth") && (destinationFormat === ".onnx" || destinationFormat === ".mlmodel");
+
+  // Contextual notes shown alongside the target-format picker, for combinations
+  // that would otherwise only surface as a confusing error after conversion.
+  const contextualHints: string[] = [];
+  if (sourceExtension === ".zip") {
+    contextualHints.push("Must be a TensorFlow SavedModel bundle (a .zip with saved_model.pb + variables/) — other ZIPs will fail.");
+  }
+  if (needsInputShape) {
+    contextualHints.push("Requires a traced/scripted PyTorch model — a raw state_dict alone won't work.");
+  }
+  if (destinationFormat === ".mlmodel") {
+    contextualHints.push("CoreML (.mlmodel) files can only be opened or run on macOS/iOS.");
+  }
 
   return (
-    <div className="bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.5)] p-8 transition-all duration-300">
+    <div className="bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.5)] p-6 transition-all duration-300">
 
       {currentStage === "idle" && (
         <div
           {...getRootProps()}
-          className={`rounded-[2rem] p-12 text-center cursor-pointer transition-all duration-300 ease-in-out flex flex-col items-center justify-center min-h-[300px] border border-gray-700 bg-transparent backdrop-blur-sm ${isDragActive ? "bg-white/10" : "hover:bg-white/5"
+          className={`rounded-[2rem] p-8 text-center cursor-pointer transition-all duration-300 ease-in-out flex flex-col items-center justify-center min-h-[260px] border border-gray-700 bg-transparent backdrop-blur-sm ${isDragActive ? "bg-white/10" : "hover:bg-white/5"
             }`}
         >
           <input {...getInputProps()} />
-          <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-6 ring-1 ring-blue-500/20 transition-all shadow-[0_0_15px_rgba(59,130,246,0.15)]">
-            <UploadCloud className="w-8 h-8 text-blue-400" />
+          <div className="w-14 h-14 bg-blue-500/10 rounded-full flex items-center justify-center mb-4 ring-1 ring-blue-500/20 transition-all shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+            <UploadCloud className="w-7 h-7 text-blue-400" />
           </div>
-          <h3 className="text-2xl font-semibold text-gray-200 mb-3">Upload your file</h3>
-          <p className="text-[15px] font-medium text-gray-500 tracking-wide mb-8">
-            Click Choose File button to get started or drag and drop files to upload.
+          <h3 className="text-2xl font-semibold text-gray-200 mb-2">Upload your file</h3>
+          <p className="text-[15px] font-medium text-gray-500 tracking-wide mb-6">
+            Click the Choose File button to get started, or drag and drop a file to upload.
           </p>
 
           <button className="flex items-center gap-3 px-10 py-3.5 rounded-full border border-blue-500/80 bg-[#081836]/60 backdrop-blur-md text-blue-400 font-semibold text-sm hover:bg-[#0c2045] transition-all shadow-[0_0_20px_rgba(59,130,246,0.3)]">
             Choose File
           </button>
+
+          {uploadRejectionMessage && (
+            <p className="mt-6 text-sm text-red-400 font-medium">{uploadRejectionMessage}</p>
+          )}
         </div>
       )}
 
       {currentStage === "options" && uploadedFileObj && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 flex items-center justify-between">
             <div className="truncate max-w-[70%]">
               <p className="text-sm font-medium text-slate-200 truncate">
@@ -236,7 +311,7 @@ export default function ConverterCard() {
                   )}
                   {allowedFormats.map((itemValue) => (
                     <option key={itemValue} value={itemValue}>
-                      {itemValue.toUpperCase()}
+                      {FORMAT_LABELS[itemValue] || itemValue.toUpperCase()}
                     </option>
                   ))}
                 </select>
@@ -254,10 +329,21 @@ export default function ConverterCard() {
                 </p>
               </div>
             )}
+
+            {contextualHints.length > 0 && (
+              <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-start gap-2">
+                <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  {contextualHints.map((hint) => (
+                    <p key={hint} className="text-xs text-blue-200 leading-relaxed">{hint}</p>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          {isPyTorchToOnnx && (
-            <div className="space-y-2 mt-4 animate-in fade-in duration-300">
+          {needsInputShape && (
+            <div className="space-y-2 animate-in fade-in duration-300">
               <label className="text-sm font-medium text-slate-300 block">
                 Model Input Shape (PyTorch Only)
               </label>
@@ -319,7 +405,7 @@ export default function ConverterCard() {
             </div>
           )}
 
-          <div className="pt-2 flex gap-3">
+          <div className="flex gap-3">
             <button
               onClick={triggerReset}
               className="flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold rounded-xl transition-colors focus:ring-2 focus:ring-slate-400 focus:outline-none"
@@ -328,7 +414,7 @@ export default function ConverterCard() {
             </button>
             <button
               onClick={executeConversion}
-              disabled={allowedFormats.length === 0 || !destinationFormat || (isPyTorchToOnnx && shapeMode === "custom" && !inputShape.trim())}
+              disabled={allowedFormats.length === 0 || !destinationFormat || (needsInputShape && shapeMode === "custom" && !inputShape.trim())}
               className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-500/20 transition-all focus:ring-2 focus:ring-blue-400 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               Convert <ArrowRight className="w-4 h-4" />
@@ -391,16 +477,16 @@ export default function ConverterCard() {
           </div>
           <div>
             <h3 className="text-xl font-semibold text-white mb-2">Conversion Complete!</h3>
-            <p className="text-sm text-slate-400">Your model has been successfully converted to {destinationFormat} mapping.</p>
+            <p className="text-sm text-slate-400">Your model has been successfully converted to {FORMAT_LABELS[destinationFormat] || destinationFormat} mapping.</p>
           </div>
           <div className="flex flex-col gap-3 pt-4">
             <a
               href={downloadUrl}
-              download={`${uploadedFileObj?.name.replace(/\.[^/.]+$/, "")}${destinationFormat}`}
+              download={`${uploadedFileObj?.name.replace(/\.[^/.]+$/, "")}${DOWNLOAD_EXTENSION_OVERRIDES[destinationFormat] || destinationFormat}`}
               className="w-full px-4 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-emerald-500/20 transition-all focus:ring-2 focus:ring-emerald-400 flex items-center justify-center gap-2 no-underline"
             >
               <UploadCloud className="w-4 h-4 rotate-180" />
-              Download {destinationFormat.toUpperCase()} ({downloadSize})
+              Download {(DOWNLOAD_EXTENSION_OVERRIDES[destinationFormat] || destinationFormat).replace(".", "").toUpperCase()} ({downloadSize})
             </a>
             <button
               onClick={triggerReset}

@@ -1,9 +1,16 @@
 fastapi
 uvicorn
 python-multipart
-tensorflow-cpu
+tensorflow-cpu>=2.19.0
+tf_keras>=2.19.0
 torch --index-url https://download.pytorch.org/whl/cpu
-onnx
+onnx>=1.18.0
 onnxscript
 tf2onnx
-tf_keras
+onnx2tf
+onnx_graphsurgeon
+sng4onnx
+ai-edge-litert
+psutil
+safetensors
+coremltools

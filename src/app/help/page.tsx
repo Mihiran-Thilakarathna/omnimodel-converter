@@ -61,6 +61,18 @@ export default function HelpDocumentationPage() {
                   <ChevronRight className="w-5 h-5 text-blue-500 shrink-0" />
                   <span><strong>Keras (.keras, .h5):</strong> Standard deployment artifacts for TensorFlow pipelines and JavaScript mapping.</span>
                 </li>
+                <li className="flex items-start gap-2">
+                  <ChevronRight className="w-5 h-5 text-blue-500 shrink-0" />
+                  <span><strong>Safetensors (.safetensors):</strong> A safe, fast weights-only format for sharing PyTorch checkpoints.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <ChevronRight className="w-5 h-5 text-blue-500 shrink-0" />
+                  <span><strong>CoreML (.mlmodel):</strong> Choose this to deploy natively on iOS and macOS devices.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <ChevronRight className="w-5 h-5 text-blue-500 shrink-0" />
+                  <span><strong>SavedModel (.zip):</strong> A full TensorFlow SavedModel bundle, packaged as a ZIP so it can be uploaded or downloaded as a single file.</span>
+                </li>
               </ul>
             </section>
 

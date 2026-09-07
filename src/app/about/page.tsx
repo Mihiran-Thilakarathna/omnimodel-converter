@@ -30,10 +30,11 @@ export default function AboutOmniModelPage() {
             <div>
               <h3 className="text-white text-xl font-semibold mb-3">What can it convert?</h3>
               <ul className="list-disc list-inside space-y-2 text-gray-400">
-                <li><span className="text-white font-medium">TensorFlow & Keras:</span> .h5, .keras, .pb</li>
-                <li><span className="text-white font-medium">PyTorch:</span> .pt, .pth</li>
+                <li><span className="text-white font-medium">TensorFlow & Keras:</span> .h5, .keras, SavedModel (.pb/.zip)</li>
+                <li><span className="text-white font-medium">PyTorch:</span> .pt, .pth, .safetensors</li>
                 <li><span className="text-white font-medium">ONNX:</span> The universal format for high-speed interoperability</li>
                 <li><span className="text-white font-medium">TensorFlow Lite:</span> .tflite for edge and mobile deployment</li>
+                <li><span className="text-white font-medium">CoreML:</span> .mlmodel for iOS and macOS deployment</li>
               </ul>
             </div>
 
