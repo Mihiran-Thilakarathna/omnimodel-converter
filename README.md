@@ -86,17 +86,17 @@ Intercepts outdated `.h5` and modern `.keras` ZIP archives, parses their interna
 │         Frontend (Next.js)          │
 │  Drag & Drop UI + Progress Tracker  │
 └────────────────┬────────────────────┘
-                  │ HTTP / Multipart Form
-┌─────────────────▼────────────────────┐
-│          Backend (FastAPI)           │
-│        /api/convert  endpoint        │
+                 │ HTTP / Multipart Form
+┌─────────────── ▼────────────────────┐
+│          Backend (FastAPI)          │
+│        /api/convert  endpoint       │
 └────────────────┬────────────────────┘
-                  │
-┌─────────────────▼────────────────────┐
+                 │
+┌────────────────▼─────────────────────┐
 │           Conversion Engine          │
 │ PyTorch JIT │ TF SavedModel │ ONNX   │
 │  CoreML (coremltools) │ Safetensors  │
-└───────────────────────────────────────┘
+└──────────────────────────────────────┘
 ```
 
 ## Project Structure
